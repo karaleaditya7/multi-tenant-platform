@@ -51,14 +51,20 @@ jobs:
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG_DATA }}" | base64 --decode > $HOME/.kube/config
+          kubectl config use-context minikube
 
       - name: Update Kubernetes manifests with new image
         run: sed -i "s|image: .*|image: $DOCKER_IMAGE:${GITHUB_SHA}|g" k8s/deployment.yaml
 
+      - name: Ensure namespaces exist
+        run: |
+          for ns in user1 user2 user3; do
+            kubectl get ns $ns || kubectl create ns $ns
+          done
+
       - name: Deploy to all namespaces
         run: |
           for ns in user1 user2 user3; do
-            kubectl apply -f k8s/namespace.yaml -n $ns --validate=false || kubectl create namespace $ns
             kubectl apply -n $ns -f k8s/deployment.yaml
             kubectl apply -n $ns -f k8s/service.yaml
             kubectl apply -n $ns -f k8s/ingress.yaml

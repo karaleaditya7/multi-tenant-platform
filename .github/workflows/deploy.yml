@@ -1,4 +1,4 @@
-name: CI/CD Multi-Tenant Deployment
+name: Build & Push Multi-Tenant Docker Image
 
 on:
   push:
@@ -34,62 +34,3 @@ jobs:
 
       - name: Push Docker image
         run: docker push $DOCKER_IMAGE:${GITHUB_SHA}
-
-  deploy-to-k8s:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Set up kubectl
-        uses: actions/setup-kubectl@v4
-        with:
-          version: 'latest'
-
-      - name: Configure Kubeconfig
-        run: |
-          mkdir -p $HOME/.kube
-          echo "${{ secrets.KUBECONFIG_DATA }}" | base64 --decode > $HOME/.kube/config
-          kubectl config use-context minikube
-
-      - name: Update Kubernetes manifests with new image
-        run: sed -i "s|image: .*|image: $DOCKER_IMAGE:${GITHUB_SHA}|g" k8s/deployment.yaml
-
-      - name: Ensure namespaces exist
-        run: |
-          for ns in user1 user2 user3; do
-            kubectl get ns $ns
-            if [ $? -ne 0 ]; then
-              kubectl create ns $ns
-            fi
-          done
-
-      - name: Deploy to all namespaces
-        run: |
-          for ns in user1 user2 user3; do
-            kubectl apply -n $ns -f k8s/deployment.yaml
-            kubectl apply -n $ns -f k8s/service.yaml
-            kubectl apply -n $ns -f k8s/ingress.yaml
-          done
-
-      - name: Wait for pods to be ready
-        run: |
-          for ns in user1 user2 user3; do
-            kubectl wait --for=condition=ready pod -l app=webapp -n $ns --timeout=180s
-          done
-
-  post-deploy:
-    needs: deploy-to-k8s
-    runs-on: ubuntu-latest
-    steps:
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install Kafka dependencies
-        run: pip install kafka-python
-
-      - name: Trigger Kafka Event
-        run: python app/kafka_producer.py --event "WebsiteDeployed" --namespaces "user1,user2,user3"

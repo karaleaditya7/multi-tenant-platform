@@ -1,0 +1,85 @@
+name: CI/CD Multi-Tenant Deployment
+
+on:
+  push:
+    branches:
+      - main
+      - 'user*'   # supports multi-user branches
+  workflow_dispatch:
+
+env:
+  DOCKER_IMAGE: your-dockerhub-username/multi-tenant-app
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build Docker image
+        run: docker build -t $DOCKER_IMAGE:${GITHUB_SHA} ./docker
+
+      - name: Push Docker image
+        run: docker push $DOCKER_IMAGE:${GITHUB_SHA}
+
+  deploy-to-k8s:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: '1.29.0'
+
+      - name: Configure Kubeconfig
+        run: echo "${{ secrets.KUBECONFIG_DATA }}" > $HOME/.kube/config
+
+      - name: Update Kubernetes manifests with new image
+        run: |
+          sed -i "s|image: .*|image: $DOCKER_IMAGE:${GITHUB_SHA}|g" k8s/deployment.yaml
+
+      - name: Deploy to all namespaces
+        run: |
+          for ns in user1 user2 user3; do
+            kubectl apply -f k8s/namespace.yaml
+            kubectl apply -n $ns -f k8s/deployment.yaml
+            kubectl apply -n $ns -f k8s/service.yaml
+            kubectl apply -n $ns -f k8s/ingress.yaml
+          done
+
+      - name: Wait for pods to be ready
+        run: |
+          for ns in user1 user2 user3; do
+            kubectl wait --for=condition=ready pod -l app=webapp -n $ns --timeout=120s
+          done
+
+  post-deploy:
+    needs: deploy-to-k8s
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Kafka dependencies
+        run: pip install kafka-python
+
+      - name: Trigger Kafka Event
+        run: |
+          python app/kafka_producer.py --event "WebsiteDeployed" --namespaces "user1,user2,user3"

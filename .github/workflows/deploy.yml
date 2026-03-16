@@ -15,28 +15,23 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     steps:
-      # Checkout the repo
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      # Docker login
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Build Docker image (fixing context)
       - name: Build Docker image
         run: docker build -t $DOCKER_IMAGE:${GITHUB_SHA} -f docker/Dockerfile .
 
-      # Push Docker image
       - name: Push Docker image
         run: docker push $DOCKER_IMAGE:${GITHUB_SHA}
 
@@ -44,28 +39,22 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      # Checkout again
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # Set up kubectl
       - name: Set up kubectl
         uses: actions/setup-kubectl@v4
         with:
           version: 'latest'
 
-      # Configure kubeconfig from secret
       - name: Configure Kubeconfig
         run: |
           mkdir -p $HOME/.kube
           echo "${{ secrets.KUBECONFIG_DATA }}" | base64 --decode > $HOME/.kube/config
-          kubectl config use-context minikube  # Or your cloud context
 
-      # Test kubectl connection
-      - name: Test kubectl connection
-        run: kubectl get nodes
+      - name: Update Kubernetes manifests with new image
+        run: sed -i "s|image: .*|image: $DOCKER_IMAGE:${GITHUB_SHA}|g" k8s/deployment.yaml
 
-      # Deploy multi-tenant namespaces and resources
       - name: Deploy to all namespaces
         run: |
           for ns in user1 user2 user3; do
@@ -75,7 +64,6 @@ jobs:
             kubectl apply -n $ns -f k8s/ingress.yaml
           done
 
-      # Wait for pods to be ready
       - name: Wait for pods to be ready
         run: |
           for ns in user1 user2 user3; do
@@ -86,17 +74,13 @@ jobs:
     needs: deploy-to-k8s
     runs-on: ubuntu-latest
     steps:
-      # Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
 
-      # Install Kafka dependencies
       - name: Install Kafka dependencies
         run: pip install kafka-python
 
-      # Trigger Kafka Event
       - name: Trigger Kafka Event
-        run: |
-          python app/kafka_producer.py --event "WebsiteDeployed" --namespaces "user1,user2,user3"
+        run: python app/kafka_producer.py --event "WebsiteDeployed" --namespaces "user1,user2,user3"

@@ -59,7 +59,10 @@ jobs:
       - name: Ensure namespaces exist
         run: |
           for ns in user1 user2 user3; do
-            kubectl get ns $ns || kubectl create ns $ns
+            kubectl get ns $ns
+            if [ $? -ne 0 ]; then
+              kubectl create ns $ns
+            fi
           done
 
       - name: Deploy to all namespaces
